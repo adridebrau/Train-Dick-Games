@@ -159,9 +159,9 @@ function snd(f,d=.1,type='square',v=.04,slide=0){
     if(slide)o.frequency.exponentialRampToValueAtTime(Math.max(40,f+slide),t+d);
     g.gain.setValueAtTime(v,t);g.gain.exponentialRampToValueAtTime(.0001,t+d);o.connect(g);g.connect(AC.destination);o.start(t);o.stop(t+d)}catch(e){}
 }
-$('mute').onclick=e=>{e.stopPropagation();muted=!muted;$('mute').textContent=muted?'🔇':'🔊';if(bgmGain)bgmGain.gain.value=muted?0:.75};
+$('mute').onclick=e=>{e.stopPropagation();muted=!muted;$('mute').textContent=muted?'🔇':'🔊';musicMute()};
 
-let bgmBuf=null,bgmSrc=null,bgmGain=null,bgmPending=false;
+let bgmBuf=null,bgmPending=false;const bgmSrcs=new Set();
 function getAC(){try{AC=AC||new(window.AudioContext||window.webkitAudioContext)();return AC}catch(e){return null}}
 function musicInit(){
   if(!MUSIC_SRC||bgmBuf||musicInit.busy)return;
@@ -174,20 +174,21 @@ function musicInit(){
 function musicStart(){
   if(!MUSIC_SRC)return;
   if(!bgmBuf){bgmPending=true;musicInit();return}
-  musicStop(true);
+  musicStop();
   const ac=getAC();if(!ac)return;if(ac.state==='suspended')ac.resume();
-  bgmGain=ac.createGain();bgmGain.gain.value=muted?0:.75;
-  bgmSrc=ac.createBufferSource();bgmSrc.buffer=bgmBuf;bgmSrc.loop=true;bgmSrc.connect(bgmGain);bgmGain.connect(ac.destination);bgmSrc.start(0);
+  const g=ac.createGain(),s=ac.createBufferSource();g.gain.value=muted?0:.75;s.buffer=bgmBuf;s.loop=true;s.connect(g);g.connect(ac.destination);
+  const o={s,g};bgmSrcs.add(o);s.onended=()=>bgmSrcs.delete(o);s.start(0);
 }
-function musicStop(now){
+function musicStop(){
   bgmPending=false;
-  if(!bgmSrc)return;
-  const src=bgmSrc,g=bgmGain;bgmSrc=null;bgmGain=null;
-  try{
-    if(now){src.stop();return}
-    const t=AC.currentTime;g.gain.cancelScheduledValues(t);g.gain.setValueAtTime(g.gain.value,t);g.gain.linearRampToValueAtTime(0,t+.6);src.stop(t+.65);
-  }catch(e){try{src.stop()}catch(_){}}
+  for(const o of bgmSrcs){
+    try{o.g.gain.cancelScheduledValues(0);o.g.gain.value=0}catch(e){}
+    try{o.s.stop()}catch(e){}
+    try{o.s.disconnect()}catch(e){}
+  }
+  bgmSrcs.clear();
 }
+function musicMute(){for(const o of bgmSrcs)o.g.gain.value=muted?0:.75}
 document.addEventListener('visibilitychange',()=>{if(!AC)return;if(document.hidden)AC.suspend();else AC.resume()});
 /* ======= Niveau ======= */
 let obs=[],items=[],gaps=[],plats=[];
@@ -288,7 +289,7 @@ function inGap(x){for(const g of gaps)if(x-6>g.x&&x+6<g.x+g.w)return true;return
 let S,mode='intro',parts=[],floaters=[],T=0;
 const SIGNS=['Allez Dimitri !','Lâche rien !','Pizza après !','Tu gères !','Allez Dimi !','Courage !','Plus de canapé !','10 km ✔'];
 function reset(){
-  S={onPl:null,star:0,wind:0,px:200,py:GY,vy:0,ground:true,coy:0,buf:0,held:false,cut:false,phase:0,hearts:3,inv:0,shake:0,t:0,score:0,speed:0,cd:3.1,finT:0,deadT:0};
+  S={bn:0,onPl:null,star:0,wind:0,px:200,py:GY,vy:0,ground:true,coy:0,buf:0,held:false,cut:false,phase:0,hearts:3,inv:0,shake:0,t:0,score:0,speed:0,cd:3.1,finT:0,deadT:0};
   parts=[];floaters=[];build();
 }
 reset();
@@ -296,7 +297,7 @@ const fatOf=px=>Math.max(0,Math.min(1,1-(px-200)/(L-420)));
 
 function startGame(){
   $('intro').classList.add('hidden');$('dead').classList.add('hidden');$('reward').classList.add('hidden');$('proof').classList.add('hidden');
-  reset();mode='count';snd(440,.1);musicInit();
+  reset();mode='count';{const ac=getAC();if(ac&&ac.state==='suspended')ac.resume()}musicInit();
 }
 $('goBtn').onclick=e=>{e.stopPropagation();startGame()};
 $('retryBtn').onclick=e=>{e.stopPropagation();startGame()};
@@ -319,10 +320,11 @@ function orect(o){
 
 function update(dt){
   T+=dt;
+  if(mode!=='play'&&bgmSrcs.size)musicStop();
   for(const f of floaters)f.life-=dt;floaters=floaters.filter(f=>f.life>0);
   for(const p of parts){p.life-=dt;p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=(p.g||0)*dt}parts=parts.filter(p=>p.life>0);
   if(S.shake>0)S.shake-=dt;
-  if(mode==='count'){S.cd-=dt;if(S.cd<=0){mode='play';snd(700,.3,'square',.05);musicStart()}return}
+  if(mode==='count'){S.cd-=dt;const n=Math.ceil(S.cd-.1);if(n!==S.bn&&n>0){S.bn=n;snd(440,.14,'square',.05)}if(S.cd<=0){mode='play';snd(880,.35,'square',.06);musicStart()}return}
   if(mode==='dead'){S.deadT+=dt;if(S.deadT>.9&&$('dead').classList.contains('hidden')){
     const km=Math.round(S.px/L*100);
     const q=['Le canapé était trop tentant…','Un burger de trop sur le parcours…','Les écrans ont gagné cette fois…','Allez, on se relève et on repart !'];
@@ -1013,7 +1015,7 @@ function loop(now){
 }
 requestAnimationFrame(loop);
 // accès de test
-window.__bgmOn=()=>!!bgmSrc;window.__g={boss:()=>boss,wind:()=>windZones,plats:()=>plats,items:()=>items,mk,OB:()=>OB,test:()=>{obs.length=0;gaps.length=0;plats.length=0;let x=S.px+60;for(const t of Object.keys(OB)){obs.push(mk(t,x));x+=100}S.cd=999;mode='count'},S:()=>S,gh,obs:()=>obs,gaps:()=>gaps,mode:()=>mode,set:(m,px)=>{if(m)mode=m;if(px!=null){S.px=px;S.py=GY-gh(px);S.vy=0}},L,startGame,startReward,godmode:()=>{S.hearts=99;S.inv=1e9}};
+window.__bgmOn=()=>bgmSrcs.size;window.__g={hurtNow:()=>{S.inv=0;S.hearts=1;hurt(true)},boss:()=>boss,wind:()=>windZones,plats:()=>plats,items:()=>items,mk,OB:()=>OB,test:()=>{obs.length=0;gaps.length=0;plats.length=0;let x=S.px+60;for(const t of Object.keys(OB)){obs.push(mk(t,x));x+=100}S.cd=999;mode='count'},S:()=>S,gh,obs:()=>obs,gaps:()=>gaps,mode:()=>mode,set:(m,px)=>{if(m)mode=m;if(px!=null){S.px=px;S.py=GY-gh(px);S.vy=0}},L,startGame,startReward,godmode:()=>{S.hearts=99;S.inv=1e9}};
 })();
 </script>
 </body>
